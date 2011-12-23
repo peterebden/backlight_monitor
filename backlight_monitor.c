@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <time.h>
 
-const int TIME_BEFORE_DIM = 3;
+const int TIME_BEFORE_DIM = 30;
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 
@@ -14,7 +14,6 @@ const int KBD_DIM = 0;
 const int KBD_BRIGHT = 255;
 
 void adjust_single_brightness(int new_brightness, const char* path) {
-  printf("Adjusting brightness to %d\n", new_brightness);
     // open up the device and write the new value in
     FILE* f = fopen(path, "w");
     if(f) {
@@ -37,7 +36,7 @@ int interpolate(int a, int b, double c) {
 void continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
 	unsigned long initial_idle = info->idle;
 	struct timespec tm_remaining = { 0, 0 };
-	struct timespec tm_requested = { 0, 10000000 }; // 10ms
+	struct timespec ten_milliseconds = { 0, 10000000 };
 	for(double proportion = 1.0; proportion >= 0.0; proportion -= 0.001) {
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
 		if(info->idle < initial_idle) {
@@ -47,7 +46,7 @@ void continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
 		}
 		adjust_brightness(interpolate(SCREEN_DIM, SCREEN_BRIGHT, proportion),
                           interpolate(KBD_DIM, KBD_BRIGHT, proportion));
-		nanosleep(&tm_requested, &tm_remaining);
+		nanosleep(&ten_milliseconds, &tm_remaining);
 	}
 	adjust_brightness(SCREEN_DIM, KBD_DIM);
 }
@@ -55,10 +54,12 @@ void continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
 void wait_for_event(Display* display, XScreenSaverInfo* info) {
     // waiting until something happens
     // currently just doing polling, not sure how possible it is to get notified of events from X
+	struct timespec tm_remaining = { 0, 0 };
+	struct timespec half_second = { 0, 500000000 };
     unsigned long last_idle;
     do {
         last_idle = info->idle;
-        sleep(1);
+        nanosleep(&half_second, &tm_remaining);
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
     } while(info->idle >= last_idle);
 }
@@ -85,7 +86,6 @@ int main(int argc, char* argv[]) {
 		}
 
 		// here we have waited the requisite amount of time. dim the display.
-		printf("wibble\n");
 		continuous_dim_backlight(display, info);
 		wait_for_event(display, info);
 		adjust_brightness(SCREEN_BRIGHT, KBD_BRIGHT);
