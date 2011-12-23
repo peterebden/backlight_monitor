@@ -13,42 +13,59 @@ const int SCREEN_BRIGHT = 20000;
 const int KBD_DIM = 0;
 const int KBD_BRIGHT = 255;
 
-void adjust_single_brightness(int new_brightness, const char* path) {
+int last_screen_brightness = 20000;
+int last_kbd_brightness = 255;
+double screen_offset = 0.0;
+double kbd_offset = 0.0;
+
+int min(int a, int b) { return a < b ? a : b; }
+int max(int a, int b) { return b < a ? a : b; }
+
+void adjust_single_brightness(double new_proportion, const char* path, double* offset, int* last_brightness, int min_brightness, int max_brightness) {
     // open up the device and write the new value in
-    FILE* f = fopen(path, "w");
+	int current_brightness = *last_brightness;
+    FILE* f = fopen(path, "r+");
     if(f) {
+		fscanf(f, "%d", &current_brightness);
+		if(current_brightness != *last_brightness) {
+			// something's altered the value since we last wrote it. calculate and apply an offset.
+		    *offset += (double)(*last_brightness - current_brightness) / (max_brightness - min_brightness);
+		}
+		int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
+		new_brightness = min(max(new_brightness, min_brightness), max_brightness);
+		fseek(f, 0, SEEK_SET);
         fprintf(f, "%d", new_brightness);
 		fclose(f);
+		*last_brightness = new_brightness;
     } else {
-        printf("Could not open device file\n");
+        printf("Could not open device file %s\n", path);
     }
 }
 
-void adjust_brightness(int screen, int kbd) {
-	adjust_single_brightness(screen, screen_backlight_path);
-	adjust_single_brightness(kbd, kbd_backlight_path);
+void adjust_brightness(double proportion) {
+	adjust_single_brightness(proportion, screen_backlight_path, &screen_offset, &last_screen_brightness, SCREEN_DIM, SCREEN_BRIGHT);
+	adjust_single_brightness(proportion, kbd_backlight_path, &kbd_offset, &last_kbd_brightness, KBD_DIM, KBD_BRIGHT);
 }
 
 int interpolate(int a, int b, double c) {
 	return (int)(c*(b-a))+a;
 }
 
-void continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
+int continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
 	unsigned long initial_idle = info->idle;
 	struct timespec tm_remaining = { 0, 0 };
 	struct timespec ten_milliseconds = { 0, 10000000 };
 	for(double proportion = 1.0; proportion >= 0.0; proportion -= 0.001) {
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
 		if(info->idle < initial_idle) {
-			// obviously we've come out of idle in the last sleep. straight back to full brightness.
-			adjust_brightness(SCREEN_BRIGHT, KBD_BRIGHT);
-			return;
+			// obviously we've come out of idle in the last sleep. bail here.
+			return 1;
 		}
-		adjust_brightness(interpolate(SCREEN_DIM, SCREEN_BRIGHT, proportion),
-                          interpolate(KBD_DIM, KBD_BRIGHT, proportion));
+		adjust_brightness(proportion);
 		nanosleep(&ten_milliseconds, &tm_remaining);
 	}
-	adjust_brightness(SCREEN_DIM, KBD_DIM);
+	adjust_brightness(0.0);
+	return 0;
 }
 
 void wait_for_event(Display* display, XScreenSaverInfo* info) {
@@ -73,7 +90,7 @@ int main(int argc, char* argv[]) {
         printf("Couldn't connect to X display\n");
         return 1;
     }
-	adjust_brightness(SCREEN_BRIGHT, KBD_BRIGHT);
+	adjust_brightness(1.0);
 
     while(1) {
         // we've just gone idle. wait for 30 seconds
@@ -86,8 +103,9 @@ int main(int argc, char* argv[]) {
 		}
 
 		// here we have waited the requisite amount of time. dim the display.
-		continuous_dim_backlight(display, info);
-		wait_for_event(display, info);
-		adjust_brightness(SCREEN_BRIGHT, KBD_BRIGHT);
+		if(!continuous_dim_backlight(display, info)) {
+			wait_for_event(display, info);
+		}
+		adjust_brightness(1.0);
     }
 }
