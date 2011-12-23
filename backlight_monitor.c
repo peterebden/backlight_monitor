@@ -2,10 +2,11 @@
 #include <X11/extensions/scrnsaver.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <time.h>
 
 const int TIME_BEFORE_DIM = 3;
 static const char* device_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
-const int DIM = 8000;
+const int DIM = 1000;
 const int BRIGHT = 20000;
 
 int read_current_brightness() {
@@ -32,7 +33,9 @@ void adjust_brightness(int new_brightness) {
 
 void continuous_dim_backlight(Display* display, XScreenSaverInfo* info, int new_brightness) {
 	unsigned long initial_idle = info->idle;
-	for(int b = read_current_brightness(); b >= DIM; b -= 300) {
+	struct timespec tm_remaining = { 0, 0 };
+	struct timespec tm_requested = { 0, 10000000 }; // 10ms
+	for(int b = read_current_brightness(); b >= DIM; b -= 10) {
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
 		if(info->idle < initial_idle) {
 			// obviously we've come out of idle in the last sleep. straight back to full brightness.
@@ -40,9 +43,9 @@ void continuous_dim_backlight(Display* display, XScreenSaverInfo* info, int new_
 			return;
 		}
 		adjust_brightness(b);
-		sleep(1);
+		nanosleep(&tm_requested, &tm_remaining);
 	}
-	adjust_brightness(DIM);
+	adjust_brightness(DIM); // ensure it's rounded off at the end
 }
 
 void wait_for_event(Display* display, XScreenSaverInfo* info) {
@@ -65,6 +68,7 @@ int main(int argc, char* argv[]) {
         printf("Couldn't connect to X display\n");
         return 1;
     }
+	adjust_brightness(BRIGHT);
 
     while(1) {
         // we've just gone idle. wait for 30 seconds
@@ -79,7 +83,6 @@ int main(int argc, char* argv[]) {
 		// here we have waited the requisite amount of time. dim the display.
 		printf("wibble\n");
 		continuous_dim_backlight(display, info, DIM);
-		adjust_brightness(DIM);
 		wait_for_event(display, info);
 		adjust_brightness(BRIGHT);
     }
