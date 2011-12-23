@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <time.h>
 
-const int TIME_BEFORE_DIM = 30;
+const int TIME_BEFORE_DIM = 3;
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 
@@ -29,11 +29,12 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 		fscanf(f, "%d", &current_brightness);
 		if(current_brightness != *last_brightness) {
 			// something's altered the value since we last wrote it. calculate and apply an offset.
-		    *offset += (double)(*last_brightness - current_brightness) / (max_brightness - min_brightness);
+		    *offset += (double)(current_brightness - *last_brightness) / (max_brightness - min_brightness);
 		}
 		int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
 		new_brightness = min(max(new_brightness, min_brightness), max_brightness);
 		fseek(f, 0, SEEK_SET);
+		printf("Offset %lf\n", *offset);
         fprintf(f, "%d", new_brightness);
 		fclose(f);
 		*last_brightness = new_brightness;
@@ -90,7 +91,6 @@ int main(int argc, char* argv[]) {
         printf("Couldn't connect to X display\n");
         return 1;
     }
-	adjust_brightness(1.0);
 
     while(1) {
         // we've just gone idle. wait for 30 seconds
