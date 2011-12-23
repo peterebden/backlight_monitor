@@ -5,24 +5,18 @@
 #include <time.h>
 
 const int TIME_BEFORE_DIM = 3;
-static const char* device_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
-const int DIM = 1000;
-const int BRIGHT = 20000;
+static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
+static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 
-int read_current_brightness() {
-    int brightness = DIM;
-    FILE* f = fopen(device_path, "r");
-	if(f) {
-		fscanf(f, "%d", &brightness);
-		fclose(f);
-	}
-	return brightness;
-}
+const int SCREEN_DIM = 1000;
+const int SCREEN_BRIGHT = 20000;
+const int KBD_DIM = 0;
+const int KBD_BRIGHT = 255;
 
-void adjust_brightness(int new_brightness) {
+void adjust_single_brightness(int new_brightness, const char* path) {
   printf("Adjusting brightness to %d\n", new_brightness);
     // open up the device and write the new value in
-    FILE* f = fopen(device_path, "w");
+    FILE* f = fopen(path, "w");
     if(f) {
         fprintf(f, "%d", new_brightness);
 		fclose(f);
@@ -31,21 +25,31 @@ void adjust_brightness(int new_brightness) {
     }
 }
 
-void continuous_dim_backlight(Display* display, XScreenSaverInfo* info, int new_brightness) {
+void adjust_brightness(int screen, int kbd) {
+	adjust_single_brightness(screen, screen_backlight_path);
+	adjust_single_brightness(kbd, kbd_backlight_path);
+}
+
+int interpolate(int a, int b, double c) {
+	return (int)(c*(b-a))+a;
+}
+
+void continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
 	unsigned long initial_idle = info->idle;
 	struct timespec tm_remaining = { 0, 0 };
 	struct timespec tm_requested = { 0, 10000000 }; // 10ms
-	for(int b = read_current_brightness(); b >= DIM; b -= 10) {
+	for(double proportion = 1.0; proportion >= 0.0; proportion -= 0.001) {
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
 		if(info->idle < initial_idle) {
 			// obviously we've come out of idle in the last sleep. straight back to full brightness.
-			adjust_brightness(BRIGHT);
+			adjust_brightness(SCREEN_BRIGHT, KBD_BRIGHT);
 			return;
 		}
-		adjust_brightness(b);
+		adjust_brightness(interpolate(SCREEN_DIM, SCREEN_BRIGHT, proportion),
+                          interpolate(KBD_DIM, KBD_BRIGHT, proportion));
 		nanosleep(&tm_requested, &tm_remaining);
 	}
-	adjust_brightness(DIM); // ensure it's rounded off at the end
+	adjust_brightness(SCREEN_DIM, KBD_DIM);
 }
 
 void wait_for_event(Display* display, XScreenSaverInfo* info) {
@@ -68,7 +72,7 @@ int main(int argc, char* argv[]) {
         printf("Couldn't connect to X display\n");
         return 1;
     }
-	adjust_brightness(BRIGHT);
+	adjust_brightness(SCREEN_BRIGHT, KBD_BRIGHT);
 
     while(1) {
         // we've just gone idle. wait for 30 seconds
@@ -82,8 +86,8 @@ int main(int argc, char* argv[]) {
 
 		// here we have waited the requisite amount of time. dim the display.
 		printf("wibble\n");
-		continuous_dim_backlight(display, info, DIM);
+		continuous_dim_backlight(display, info);
 		wait_for_event(display, info);
-		adjust_brightness(BRIGHT);
+		adjust_brightness(SCREEN_BRIGHT, KBD_BRIGHT);
     }
 }
