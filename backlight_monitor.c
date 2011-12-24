@@ -7,21 +7,22 @@
 #include <string.h>
 #include <signal.h>
 
-const int TIME_BEFORE_DIM = 60;
+int time_before_dim = 60;
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state";
 
 const int SCREEN_DIM = 1000;
-const int SCREEN_BRIGHT = 20000;
+int screen_bright = 20000;
 const int KBD_DIM = 0;
-const int KBD_BRIGHT = 255;
+int kbd_bright = 255;
 
 int last_screen_brightness = 20000;
 int last_kbd_brightness = 255;
 double screen_offset = 0.0;
 double kbd_offset = 0.0;
 double power_multiplier = 1.0;
+int daemonize = 1;
 
 int min(int a, int b) { return a < b ? a : b; }
 int max(int a, int b) { return b < a ? a : b; }
@@ -64,8 +65,8 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 }
 
 void adjust_brightness(double proportion) {
-    adjust_single_brightness(proportion, screen_backlight_path, &screen_offset, &last_screen_brightness, SCREEN_DIM, SCREEN_BRIGHT);
-    adjust_single_brightness(proportion, kbd_backlight_path, &kbd_offset, &last_kbd_brightness, KBD_DIM, KBD_BRIGHT);
+    adjust_single_brightness(proportion, screen_backlight_path, &screen_offset, &last_screen_brightness, SCREEN_DIM, screen_bright);
+    adjust_single_brightness(proportion, kbd_backlight_path, &kbd_offset, &last_kbd_brightness, KBD_DIM, kbd_bright);
 }
 
 int interpolate(int a, int b, double c) {
@@ -110,7 +111,7 @@ void set_initial_value(const char* path, int value) {
     FILE* f = fopen(path, "w");
     if(!f) {
 	printf("Failed to open device %s\n", path);
-	exit(2);
+	exit(EXIT_FAILURE);
     }
     fprintf(f, "%d", value);
     fclose(f);
@@ -120,18 +121,42 @@ void set_initial_values() {
     // we might have a multiplier from the ac adapter
     refresh_power_state();
     // set the initial values to what we expect and set the 'last values'
-    set_initial_value(screen_backlight_path, last_screen_brightness = (int)(power_multiplier * SCREEN_BRIGHT));
-    set_initial_value(kbd_backlight_path, last_kbd_brightness = (int)(power_multiplier * KBD_BRIGHT));
+    set_initial_value(screen_backlight_path, last_screen_brightness = (int)(power_multiplier * screen_bright));
+    set_initial_value(kbd_backlight_path, last_kbd_brightness = (int)(power_multiplier * kbd_bright));
+}
+
+void parse_options(int argc, char* argv[]) {
+    int opt;
+    while ((opt = getopt(argc, argv, "ds:k:")) != -1) {
+        switch(opt) {
+        case 'd':
+            daemonize = 0;
+            break;
+        case 's':
+            screen_bright = atoi(optarg);
+            break;
+	case 'k':
+	    kbd_bright = atoi(optarg);
+	    break;
+	case 't':
+	    time_before_dim = atoi(optarg);
+	    break;
+        default: /* '?' */
+            fprintf(stderr, "Usage: %s [-d] [-s max_screen_brightness] [-k max_keyboard_brightness] [-t time_before_dim]\n", argv[0]);
+            exit(EXIT_FAILURE);
+        }
+    }
 }
  
 int main(int argc, char* argv[]) {
+    parse_options(argc, argv);
     // Daemonize, unless we're passed -d
-    if(argc < 2 || strcmp(argv[1], "-d") != 0) {
+    if(daemonize) {
 	pid_t pid = fork();
 	if(pid < 0) {
 	    printf("Fork failed with %d\n", pid);
 	} else if(pid > 0) {
-	    return 0; // child has forked off correctly, we terminate immediately.
+	    return EXIT_SUCCESS; // child has forked off correctly, we terminate immediately.
 	}
     }
 
@@ -142,17 +167,17 @@ int main(int argc, char* argv[]) {
     Display* display = XOpenDisplay(0);
     if(display == NULL) {
         printf("Couldn't connect to X display\n");
-        return 1;
+        return EXIT_FAILURE;
     }
 
     set_initial_values();
 
     while(1) {
         // we've just gone idle. wait for 30 seconds
-        sleep(TIME_BEFORE_DIM - info->idle/1000);
+        sleep(time_before_dim - info->idle/1000);
 	// now count the idle time
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
-	if(info->idle < TIME_BEFORE_DIM) {
+	if(info->idle < time_before_dim) {
 	    // we must have been woken in between. go back to waiting.
 	    continue;
 	}
