@@ -29,7 +29,9 @@ double power_adapter_offset() {
     char buf[255];
     FILE* f = fopen(ac_adapter_path, "r");
     if(f) {
-	fscanf(f, "state:  %s", buf);
+	if(fscanf(f, "state:  %s", buf) != 1) {
+	    printf("Failed to read power adapter state from %s\n", ac_adapter_path);
+	}
 	fclose(f);
 	if(strstr(buf, "off")) {
 	    return -0.5; // half brightness when power adapter offline
@@ -45,7 +47,9 @@ int read_initial_value(const char* path) {
 	exit(2);
     }
     int x = 0;
-    fscanf(f, "%d", &x);
+    if(fscanf(f, "%d", &x) != 1) {
+	printf("Failed to read the value from device %s\n", path);
+    }
     fclose(f);
     return x;
 }
@@ -61,18 +65,19 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
     int current_brightness = *last_brightness;
     FILE* f = fopen(path, "r+");
     if(f) {
-	fscanf(f, "%d", &current_brightness);
-	if(current_brightness != *last_brightness) {
-	    // something's altered the value since we last wrote it. calculate and apply an offset.
-	    *offset += (double)(current_brightness - *last_brightness) / (max_brightness - min_brightness);
+	if(fscanf(f, "%d", &current_brightness) == 1) {
+	    if(current_brightness != *last_brightness) {
+		// something's altered the value since we last wrote it. calculate and apply an offset.
+		*offset += (double)(current_brightness - *last_brightness) / (max_brightness - min_brightness);
+	    }
+	    int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
+	    new_brightness = min(max(new_brightness, min_brightness), max_brightness);
+	    fseek(f, 0, SEEK_SET);
+	    printf("Offset %lf\n", *offset);
+	    fprintf(f, "%d", new_brightness);
+	    *last_brightness = new_brightness;
 	}
-	int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
-	new_brightness = min(max(new_brightness, min_brightness), max_brightness);
-	fseek(f, 0, SEEK_SET);
-	printf("Offset %lf\n", *offset);
-	fprintf(f, "%d", new_brightness);
 	fclose(f);
-	*last_brightness = new_brightness;
     } else {
         printf("Could not open device file %s\n", path);
     }
@@ -127,7 +132,6 @@ int main(int argc, char* argv[]) {
     signal(SIGUSR1, refresh_power_state);
 
     XScreenSaverInfo* info = XScreenSaverAllocInfo();
-    XEvent ev;
     info->idle = 0; // ensure this is initialised since we'll calculate on it shortly
     Display* display = XOpenDisplay(0);
     if(display == NULL) {
