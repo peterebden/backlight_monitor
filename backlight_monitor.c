@@ -129,6 +129,14 @@ void refresh_power_state() {
 }
  
 int main(int argc, char* argv[]) {
+    // Daemonize
+    pid_t pid = fork();
+    if(pid < 0) {
+	printf("Fork failed with %d\n", pid);
+    } else if(pid > 0) {
+	return 0; // child has forked off correctly, we terminate immediately.
+    }
+
     signal(SIGUSR1, refresh_power_state);
 
     XScreenSaverInfo* info = XScreenSaverAllocInfo();
