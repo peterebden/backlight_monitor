@@ -7,7 +7,7 @@
 #include <string.h>
 #include <signal.h>
 
-const int TIME_BEFORE_DIM = 30;
+const int TIME_BEFORE_DIM = 60;
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state";
@@ -21,11 +21,12 @@ int last_screen_brightness = 20000;
 int last_kbd_brightness = 255;
 double screen_offset = 0.0;
 double kbd_offset = 0.0;
+double power_multiplier = 1.0;
 
 int min(int a, int b) { return a < b ? a : b; }
 int max(int a, int b) { return b < a ? a : b; }
 
-double power_adapter_offset() {
+double power_adapter_multiplier() {
     char buf[255];
     FILE* f = fopen(ac_adapter_path, "r");
     if(f) {
@@ -34,30 +35,10 @@ double power_adapter_offset() {
 	}
 	fclose(f);
 	if(strstr(buf, "off")) {
-	    return -0.5; // half brightness when power adapter offline
+	    return 0.5; // half brightness when power adapter offline
 	}
     }
-    return 0.0;
-}
-
-int read_initial_value(const char* path) {
-    FILE* f = fopen(path, "r");
-    if(!f) {
-	printf("Failed to open device %s\n", path);
-	exit(2);
-    }
-    int x = 0;
-    if(fscanf(f, "%d", &x) != 1) {
-	printf("Failed to read the value from device %s\n", path);
-    }
-    fclose(f);
-    return x;
-}
-
-void read_initial_values() {
-    // first read to sync up all the values etc
-    last_screen_brightness = read_initial_value(screen_backlight_path);
-    last_kbd_brightness = read_initial_value(kbd_backlight_path);
+    return 1.0; // full brightness otherwise
 }
 
 void adjust_single_brightness(double new_proportion, const char* path, double* offset, int* last_brightness, int min_brightness, int max_brightness) {
@@ -71,9 +52,8 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 		*offset += (double)(current_brightness - *last_brightness) / (max_brightness - min_brightness);
 	    }
 	    int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
-	    new_brightness = min(max(new_brightness, min_brightness), max_brightness);
+	    new_brightness = min(max(new_brightness * power_multiplier, min_brightness), max_brightness);
 	    fseek(f, 0, SEEK_SET);
-	    printf("Offset %lf\n", *offset);
 	    fprintf(f, "%d", new_brightness);
 	    *last_brightness = new_brightness;
 	}
@@ -123,18 +103,36 @@ void wait_for_event(Display* display, XScreenSaverInfo* info) {
 }
 
 void refresh_power_state() {
-    double offset = power_adapter_offset();
-    screen_offset += offset;
-    kbd_offset += offset;
+    power_multiplier = power_adapter_multiplier();
+}
+
+void set_initial_value(const char* path, int value) {
+    FILE* f = fopen(path, "w");
+    if(!f) {
+	printf("Failed to open device %s\n", path);
+	exit(2);
+    }
+    fprintf(f, "%d", value);
+    fclose(f);
+}
+
+void set_initial_values() {
+    // we might have a multiplier from the ac adapter
+    refresh_power_state();
+    // set the initial values to what we expect and set the 'last values'
+    set_initial_value(screen_backlight_path, last_screen_brightness = (int)(power_multiplier * SCREEN_BRIGHT));
+    set_initial_value(kbd_backlight_path, last_kbd_brightness = (int)(power_multiplier * KBD_BRIGHT));
 }
  
 int main(int argc, char* argv[]) {
-    // Daemonize
-    pid_t pid = fork();
-    if(pid < 0) {
-	printf("Fork failed with %d\n", pid);
-    } else if(pid > 0) {
-	return 0; // child has forked off correctly, we terminate immediately.
+    // Daemonize, unless we're passed -d
+    if(argc < 2 || strcmp(argv[1], "-d") != 0) {
+	pid_t pid = fork();
+	if(pid < 0) {
+	    printf("Fork failed with %d\n", pid);
+	} else if(pid > 0) {
+	    return 0; // child has forked off correctly, we terminate immediately.
+	}
     }
 
     signal(SIGUSR1, refresh_power_state);
@@ -147,7 +145,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    read_initial_values();
+    set_initial_values();
 
     while(1) {
         // we've just gone idle. wait for 30 seconds
