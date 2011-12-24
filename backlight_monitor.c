@@ -7,7 +7,7 @@
 #include <string.h>
 #include <signal.h>
 
-int time_before_dim = 60;
+int time_before_dim = 120;
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state";
@@ -127,7 +127,7 @@ void set_initial_values() {
 
 void parse_options(int argc, char* argv[]) {
     int opt;
-    while ((opt = getopt(argc, argv, "ds:k:")) != -1) {
+    while ((opt = getopt(argc, argv, "ds:k:t:")) != -1) {
         switch(opt) {
         case 'd':
             daemonize = 0;
@@ -177,7 +177,7 @@ int main(int argc, char* argv[]) {
         sleep(time_before_dim - info->idle/1000);
 	// now count the idle time
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
-	if(info->idle < time_before_dim) {
+	if(info->idle < time_before_dim*1000) {
 	    // we must have been woken in between. go back to waiting.
 	    continue;
 	}
