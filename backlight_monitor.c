@@ -22,6 +22,7 @@ int last_kbd_brightness = 255;
 double screen_offset = 0.0;
 double kbd_offset = 0.0;
 double power_multiplier = 1.0;
+double last_proportion = 1.0;
 int daemonize = 1;
 
 int min(int a, int b) { return a < b ? a : b; }
@@ -67,6 +68,7 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 void adjust_brightness(double proportion) {
     adjust_single_brightness(proportion, screen_backlight_path, &screen_offset, &last_screen_brightness, SCREEN_DIM, screen_bright);
     adjust_single_brightness(proportion, kbd_backlight_path, &kbd_offset, &last_kbd_brightness, KBD_DIM, kbd_bright);
+    last_proportion = proportion;
 }
 
 int interpolate(int a, int b, double c) {
@@ -105,6 +107,8 @@ void wait_for_event(Display* display, XScreenSaverInfo* info) {
 
 void refresh_power_state() {
     power_multiplier = power_adapter_multiplier();
+    // call again with the last adjustment passed in case it's changed.
+    adjust_brightness(last_proportion);
 }
 
 void set_initial_value(const char* path, int value) {
