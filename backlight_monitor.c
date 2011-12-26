@@ -7,7 +7,7 @@
 #include <string.h>
 #include <signal.h>
 
-int time_before_dim = 120;
+int time_before_dim = 90;
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state";
@@ -105,7 +105,7 @@ void wait_for_event(Display* display, XScreenSaverInfo* info) {
     } while(info->idle >= last_idle);
 }
 
-void refresh_power_state() {
+void refresh_adapter_state() {
     power_multiplier = power_adapter_multiplier();
     // call again with the last adjustment passed in case it's changed.
     adjust_brightness(last_proportion);
@@ -123,7 +123,7 @@ void set_initial_value(const char* path, int value) {
 
 void set_initial_values() {
     // we might have a multiplier from the ac adapter
-    refresh_power_state();
+    refresh_adapter_state();
     // set the initial values to what we expect and set the 'last values'
     set_initial_value(screen_backlight_path, last_screen_brightness = (int)(power_multiplier * screen_bright));
     set_initial_value(kbd_backlight_path, last_kbd_brightness = (int)(power_multiplier * kbd_bright));
@@ -164,7 +164,7 @@ int main(int argc, char* argv[]) {
 	}
     }
 
-    signal(SIGUSR1, refresh_power_state);
+    signal(SIGUSR1, refresh_adapter_state);
 
     XScreenSaverInfo* info = XScreenSaverAllocInfo();
     info->idle = 0; // ensure this is initialised since we'll calculate on it shortly
