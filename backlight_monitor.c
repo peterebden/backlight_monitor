@@ -227,6 +227,9 @@ int main(int argc, char* argv[]) {
 	for(int i = 0; i < time_before_dim * 1000 - info->idle; i += 2000) {
 	    sleep(2);
 	    update_light_sensor();
+	    if(!daemonize) {
+		printf("Time until dimming planned to begin: %ld\n", time_before_dim - info->idle/1000 - i/1000);
+	    }
 	}
 	// now check the idle time again
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
@@ -236,6 +239,9 @@ int main(int argc, char* argv[]) {
 	}
 
 	// here we have waited the requisite amount of time. dim the display.
+	if(!daemonize) {
+	    printf("Dimming display\n");
+	}
 	if(!continuous_dim_backlight(display, info)) {
 	    wait_for_event(display, info);
 	}
