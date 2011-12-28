@@ -18,8 +18,8 @@ int screen_bright = 20000;
 const int KBD_DIM = 0;
 int kbd_bright = 255;
 
-int last_screen_brightness = 20000;
-int last_kbd_brightness = 255;
+int last_screen_brightness = -1;
+int last_kbd_brightness = -1;
 double screen_offset = 0.0;
 double kbd_offset = 0.0;
 double power_multiplier = 1.0;
@@ -56,7 +56,7 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
     FILE* f = fopen(path, "r+");
     if(f) {
 	if(fscanf(f, "%d", &current_brightness) == 1) {
-	    if(current_brightness != *last_brightness) {
+	    if(current_brightness != *last_brightness && *last_brightness >= 0) {
 		// something's altered the value since we last wrote it. calculate and apply an offset.
 		*offset += (double)(current_brightness - *last_brightness) / (max_brightness - min_brightness);
 	    }
@@ -69,6 +69,17 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 	fclose(f);
     } else {
         printf("Could not open device file %s\n", path);
+    }
+
+    // print some debugging info if it'll be visible
+    if(!daemonize) {
+	printf("Adjusting brightness at %s\n"
+	       "    New proportion: %lf\n"
+	       "    New brightness: %d\n"
+	       "    Power multiplier: %lf\n"
+	       "    Sensor multiplier: %lf\n"
+	       "    Offset: %lf\n",
+	       path, new_proportion, *last_brightness, power_multiplier, sensor_multiplier, *offset);
     }
 }
 
@@ -106,6 +117,15 @@ void update_light_sensor() {
     double kbd = (x < 0 || x > countof(KBD_SENSOR_LOOKUP) ? 0.5 : KBD_SENSOR_LOOKUP[x]);
 
     if(screen != screen_multiplier || kbd != kbd_multiplier) {
+
+	if(!daemonize) {
+	    printf("Light sensor value changed. Updating brightness\n"
+		   "    New sensor value: %d\n"
+		   "    New screen multiplier: %lf\n"
+		   "    New keyboard multiplier: %lf\n",
+		   x, screen, kbd);
+	}
+
 	screen_multiplier = screen;
 	kbd_multiplier = kbd;
 	adjust_brightness(last_proportion);
@@ -147,25 +167,6 @@ void refresh_adapter_state() {
     power_multiplier = power_adapter_multiplier();
     // call again with the last adjustment passed in case it's changed.
     adjust_brightness(last_proportion);
-}
-
-void set_initial_value(const char* path, int value) {
-    FILE* f = fopen(path, "w");
-    if(!f) {
-	printf("Failed to open device %s\n", path);
-	exit(EXIT_FAILURE);
-    }
-    fprintf(f, "%d", value);
-    fclose(f);
-}
-
-void set_initial_values() {
-    // we might have a multiplier from the ac adapter
-    refresh_adapter_state();
-    // set the initial values to what we expect and set the 'last values'
-    set_initial_value(screen_backlight_path, last_screen_brightness = (int)(power_multiplier * screen_bright));
-    set_initial_value(kbd_backlight_path, last_kbd_brightness = (int)(power_multiplier * kbd_bright));
-    update_light_sensor();
 }
 
 void parse_options(int argc, char* argv[]) {
@@ -213,7 +214,10 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
-    set_initial_values();
+    // do some initial updates to make sure everything's been read at first
+    // this will set the initial brightness values for us as well
+    refresh_adapter_state();
+    update_light_sensor();
 
     // NB. ideally we would use select() or something to wait for the applesmc sysfs entry
     //     to change, but it doesn't seem to work...
