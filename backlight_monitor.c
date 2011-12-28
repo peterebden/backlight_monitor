@@ -11,6 +11,7 @@ int time_before_dim = 90;
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
 static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state";
+static const char* sensor_path = "/sys/devices/platform/applesmc.768/light";
 
 const int SCREEN_DIM = 1000;
 int screen_bright = 20000;
@@ -23,17 +24,23 @@ double screen_offset = 0.0;
 double kbd_offset = 0.0;
 double power_multiplier = 1.0;
 double last_proportion = 1.0;
+double screen_multiplier = 1.0;
+double kbd_multiplier = 1.0;
 int daemonize = 1;
+
+const double SCREEN_SENSOR_LOOKUP[] = { 0.5, 0.6, 0.68, 0.76, 0.80, 0.84, 0.87, 0.90, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99 };
+const double KBD_SENSOR_LOOKUP[] = { 1.0, 0.9, 0.82, 0.76, 0.71, 0.67, 0.64, 0.61, 0.59, 0.57, 0.56, 0.55, 0.54, 0.53, 0.52, 0.51 };
 
 int min(int a, int b) { return a < b ? a : b; }
 int max(int a, int b) { return b < a ? a : b; }
+#define countof(array) (sizeof(array)/sizeof(array[0]))
 
 double power_adapter_multiplier() {
     char buf[255];
     FILE* f = fopen(ac_adapter_path, "r");
     if(f) {
 	if(fscanf(f, "state:  %s", buf) != 1) {
-	    printf("Failed to read power adapter state from %s\n", ac_adapter_path);
+	    fprintf(stderr, "Failed to read power adapter state from %s\n", ac_adapter_path);
 	}
 	fclose(f);
 	if(strstr(buf, "off")) {
@@ -43,7 +50,7 @@ double power_adapter_multiplier() {
     return 1.0; // full brightness otherwise
 }
 
-void adjust_single_brightness(double new_proportion, const char* path, double* offset, int* last_brightness, int min_brightness, int max_brightness) {
+void adjust_single_brightness(double new_proportion, const char* path, double* offset, int* last_brightness, int min_brightness, int max_brightness, double sensor_multiplier) {
     // open up the device and write the new value in
     int current_brightness = *last_brightness;
     FILE* f = fopen(path, "r+");
@@ -54,7 +61,7 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 		*offset += (double)(current_brightness - *last_brightness) / (max_brightness - min_brightness);
 	    }
 	    int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
-	    new_brightness = min(max(new_brightness * power_multiplier, min_brightness), max_brightness);
+	    new_brightness = min(max(new_brightness * power_multiplier * sensor_multiplier, min_brightness), max_brightness);
 	    fseek(f, 0, SEEK_SET);
 	    fprintf(f, "%d", new_brightness);
 	    *last_brightness = new_brightness;
@@ -66,13 +73,43 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 }
 
 void adjust_brightness(double proportion) {
-    adjust_single_brightness(proportion, screen_backlight_path, &screen_offset, &last_screen_brightness, SCREEN_DIM, screen_bright);
-    adjust_single_brightness(proportion, kbd_backlight_path, &kbd_offset, &last_kbd_brightness, KBD_DIM, kbd_bright);
+    adjust_single_brightness(proportion, screen_backlight_path, &screen_offset, &last_screen_brightness, SCREEN_DIM, screen_bright, screen_multiplier);
+    adjust_single_brightness(proportion, kbd_backlight_path, &kbd_offset, &last_kbd_brightness, KBD_DIM, kbd_bright, kbd_multiplier);
     last_proportion = proportion;
 }
 
 int interpolate(int a, int b, double c) {
     return (int)(c*(b-a))+a;
+}
+
+void update_light_sensor() {
+    int x = 255, y = 0;
+    FILE* f = fopen(sensor_path, "r");
+    if(f) {
+	// the second number always appears to be 0, but am reading it anyway just in case
+	if(fscanf(f, "(%d,%d)", &x, &y) != 2) {
+	    fprintf(stderr, "Didn't read exactly two entries from light sensor\n");
+	}
+	fclose(f);
+    } else {
+	fprintf(stderr, "Can't open light sensor for reading\n");
+    }
+    // now calculate updates to keyboard and screen
+    // this is a bit sucky in that the resolution of the sensor seems to be
+    // inadequate; there's quite an interesting range underneath the bottom of the scale
+    // and in practice values over 20 or so don't make a lot of difference.
+    //
+    // the screen changes in rough proportion to ambient light
+    // and the keyboard in inverse proportion to it
+    double screen = (x < 0 || x >= countof(SCREEN_SENSOR_LOOKUP) ? 1.0 : SCREEN_SENSOR_LOOKUP[x]);
+    // the keyboard multiplier changes in inverse proportion
+    double kbd = (x < 0 || x > countof(KBD_SENSOR_LOOKUP) ? 0.5 : KBD_SENSOR_LOOKUP[x]);
+
+    if(screen != screen_multiplier || kbd != kbd_multiplier) {
+	screen_multiplier = screen;
+	kbd_multiplier = kbd;
+	adjust_brightness(last_proportion);
+    }
 }
 
 int continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
@@ -102,6 +139,7 @@ void wait_for_event(Display* display, XScreenSaverInfo* info) {
         last_idle = info->idle;
         nanosleep(&half_second, &tm_remaining);
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
+	update_light_sensor();
     } while(info->idle >= last_idle);
 }
 
@@ -127,6 +165,7 @@ void set_initial_values() {
     // set the initial values to what we expect and set the 'last values'
     set_initial_value(screen_backlight_path, last_screen_brightness = (int)(power_multiplier * screen_bright));
     set_initial_value(kbd_backlight_path, last_kbd_brightness = (int)(power_multiplier * kbd_bright));
+    update_light_sensor();
 }
 
 void parse_options(int argc, char* argv[]) {
@@ -176,10 +215,16 @@ int main(int argc, char* argv[]) {
 
     set_initial_values();
 
+    // NB. ideally we would use select() or something to wait for the applesmc sysfs entry
+    //     to change, but it doesn't seem to work...
+
     while(1) {
-        // we've just gone idle. wait for 30 seconds
-        sleep(time_before_dim - info->idle/1000);
-	// now count the idle time
+        // we've just gone idle. wait in 2 second chunks to keep checking the backlight
+	for(int i = 0; i < time_before_dim * 1000 - info->idle; i += 2000) {
+	    sleep(2);
+	    update_light_sensor();
+	}
+	// now check the idle time again
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
 	if(info->idle < time_before_dim*1000) {
 	    // we must have been woken in between. go back to waiting.
