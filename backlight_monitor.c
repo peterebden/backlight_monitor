@@ -13,7 +13,7 @@ static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brig
 static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state";
 static const char* sensor_path = "/sys/devices/platform/applesmc.768/light";
 
-const int SCREEN_DIM = 1000;
+const int SCREEN_DIM = 500;
 int screen_bright = 20000;
 const int KBD_DIM = 0;
 int kbd_bright = 255;
@@ -28,8 +28,10 @@ double screen_multiplier = 1.0;
 double kbd_multiplier = 1.0;
 int daemonize = 1;
 
-const double SCREEN_SENSOR_LOOKUP[] = { 0.5, 0.6, 0.68, 0.76, 0.80, 0.84, 0.87, 0.90, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99 };
-const double KBD_SENSOR_LOOKUP[] = { 1.0, 0.9, 0.82, 0.76, 0.71, 0.67, 0.64, 0.61, 0.59, 0.57, 0.56, 0.55, 0.54, 0.53, 0.52, 0.51 };
+const double SCREEN_SENSOR_LOOKUP[] = { 0.5, 0.55, 0.60, 0.64, 0.68, 0.72, 0.75, 0.78, 0.81, 0.84, 0.86,
+                                        0.88, 0.90, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99 };
+const double KBD_SENSOR_LOOKUP[] = { 1.0, 0.95, 0.90, 0.86, 0.82, 0.78, 0.75, 0.72, 0.69, 0.66, 0.64, 0.62, 
+                                     0.60, 0.59, 0.58, 0.57, 0.56, 0.55, 0.54, 0.53, 0.52, 0.51 };
 
 int min(int a, int b) { return a < b ? a : b; }
 int max(int a, int b) { return b < a ? a : b; }
