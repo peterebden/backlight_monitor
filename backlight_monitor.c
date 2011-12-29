@@ -27,6 +27,7 @@ double last_proportion = 1.0;
 double screen_multiplier = 1.0;
 double kbd_multiplier = 1.0;
 int daemonize = 1;
+int is_dimmed = 0;
 
 const double SCREEN_SENSOR_LOOKUP[] = { 0.5, 0.55, 0.60, 0.64, 0.68, 0.72, 0.75, 0.78, 0.81, 0.84, 0.86,
                                         0.88, 0.90, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99 };
@@ -63,14 +64,18 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 		*offset += (double)(current_brightness - *last_brightness) / (max_brightness - min_brightness);
 	    }
 	    int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
-	    new_brightness = min(max(new_brightness * power_multiplier * sensor_multiplier, min_brightness), max_brightness);
+	    if(is_dimmed) {
+		new_brightness = min_brightness * power_multiplier; // never adjust any higher than the min when fully dimmed
+	    } else {
+		new_brightness = min(max(new_brightness * power_multiplier * sensor_multiplier, min_brightness), max_brightness);
+	    }
 	    fseek(f, 0, SEEK_SET);
 	    fprintf(f, "%d", new_brightness);
 	    *last_brightness = new_brightness;
 	}
 	fclose(f);
     } else {
-        printf("Could not open device file %s\n", path);
+        fprintf(stderr, "Could not open device file %s\n", path);
     }
 
     // print some debugging info if it'll be visible
@@ -148,6 +153,7 @@ int continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
 	nanosleep(&ten_milliseconds, &tm_remaining);
     }
     adjust_brightness(0.0);
+    is_dimmed = 1;
     return 0;
 }
 
@@ -200,7 +206,7 @@ int main(int argc, char* argv[]) {
     if(daemonize) {
 	pid_t pid = fork();
 	if(pid < 0) {
-	    printf("Fork failed with %d\n", pid);
+	    fprintf(stderr, "Fork failed with %d\n", pid);
 	} else if(pid > 0) {
 	    return EXIT_SUCCESS; // child has forked off correctly, we terminate immediately.
 	}
@@ -212,7 +218,7 @@ int main(int argc, char* argv[]) {
     info->idle = 0; // ensure this is initialised since we'll calculate on it shortly
     Display* display = XOpenDisplay(0);
     if(display == NULL) {
-        printf("Couldn't connect to X display\n");
+        fprintf(stderr, "Couldn't connect to X display\n");
         return EXIT_FAILURE;
     }
 
@@ -247,6 +253,7 @@ int main(int argc, char* argv[]) {
 	if(!continuous_dim_backlight(display, info)) {
 	    wait_for_event(display, info);
 	}
+	is_dimmed = 0;
 	adjust_brightness(1.0);
     }
 }
