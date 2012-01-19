@@ -29,6 +29,9 @@ double kbd_multiplier = 1.0;
 int daemonize = 1;
 int is_dimmed = 0;
 
+unsigned long lock_delay_ms = 10 * 60 * 1000; // lock screen after 10 minutes idle
+static const char* screen_lock_command = "/usr/bin/slimlock";
+
 const double SCREEN_SENSOR_LOOKUP[] = { 0.5, 0.55, 0.60, 0.64, 0.68, 0.72, 0.75, 0.78, 0.81, 0.84, 0.86,
                                         0.88, 0.90, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99 };
 const double KBD_SENSOR_LOOKUP[] = { 1.0, 0.95, 0.90, 0.86, 0.82, 0.78, 0.75, 0.72, 0.69, 0.66, 0.64, 0.62, 
@@ -157,17 +160,45 @@ int continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
     return 0;
 }
 
+void lock_screen() {
+    // right, we simply want to run an arbitrary program here (usually slimlock)
+    // system() doesn't work because we don't want to wait for it to return, so looks
+    // like it's vfork()+exec() to the rescue
+    if(!daemonize) {
+	printf("Forking to lock screen\n");
+    }
+    pid_t pid = vfork();
+    if(pid < 0) {
+	fprintf(stderr, "VFork failed with %d\n", pid);
+    } else if(pid == 0) {
+        // we are now the child process. run the screen locker.
+	execl(screen_lock_command, screen_lock_command, NULL);
+	exit(EXIT_FAILURE); // we shouldn't get here. if we do exec() has failed - there's not much to be done, just bail.
+    } else if(!daemonize) {
+	printf("Forked child process %d. Continuing.\n", pid);
+    }
+}
+
 void wait_for_event(Display* display, XScreenSaverInfo* info) {
     // waiting until something happens
     // currently just doing polling, not sure how possible it is to get notified of events from X
     struct timespec tm_remaining = { 0, 0 };
     struct timespec half_second = { 0, 500000000 };
     unsigned long last_idle;
+    int locked_screen = 0;
     do {
         last_idle = info->idle;
         nanosleep(&half_second, &tm_remaining);
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
 	update_light_sensor();
+
+	// now lock screen if we've gone over the threshold - but obviously only the first time
+	// slimlock checks itself if it's already running, but we don't want to spawn new slimlock
+	// processes every second if they're not going to do anything!
+	if(!locked_screen && info->idle >= lock_delay_ms) {
+	    lock_screen();
+	    locked_screen = 1;
+	}
     } while(info->idle >= last_idle);
 }
 
@@ -179,7 +210,7 @@ void refresh_adapter_state() {
 
 void parse_options(int argc, char* argv[]) {
     int opt;
-    while ((opt = getopt(argc, argv, "ds:k:t:")) != -1) {
+    while ((opt = getopt(argc, argv, "ds:k:t:l:")) != -1) {
         switch(opt) {
         case 'd':
             daemonize = 0;
@@ -193,8 +224,11 @@ void parse_options(int argc, char* argv[]) {
 	case 't':
 	    time_before_dim = atoi(optarg);
 	    break;
+	case 'l':
+	    lock_delay_ms = atoi(optarg) * 1000;
+	    break;
         default: /* '?' */
-            fprintf(stderr, "Usage: %s [-d] [-s max_screen_brightness] [-k max_keyboard_brightness] [-t time_before_dim]\n", argv[0]);
+            fprintf(stderr, "Usage: %s [-d] [-s max_screen_brightness] [-k max_keyboard_brightness] [-t time_before_dim] [-l lock_delay]\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
@@ -253,6 +287,7 @@ int main(int argc, char* argv[]) {
 	if(!continuous_dim_backlight(display, info)) {
 	    wait_for_event(display, info);
 	}
+	// once we get here, we are undimming because something's happened
 	is_dimmed = 0;
 	adjust_brightness(1.0);
     }
