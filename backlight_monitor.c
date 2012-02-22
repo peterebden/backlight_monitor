@@ -1,3 +1,28 @@
+/* 
+    backlight_monitor
+
+    This is a (relatively) simple program for monitoring the X idle state
+    and light sensor to decide when to dim the screen, and implementing a
+    slow smooth fade to dark when the machine goes idle.
+    Various other features including screenlocking (via activating a 
+    third-party locker binary) have crept in over time as well.
+    
+    Copyright (c) 2011-2012 Peter Ebden <peter.ebden@gmail.com>
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    See <http://www.gnu.org/licenses/> for further information.
+
+*/
+
 #include <X11/Xlib.h>
 #include <X11/extensions/scrnsaver.h>
 #include <stdio.h>
@@ -7,12 +32,15 @@
 #include <string.h>
 #include <signal.h>
 
-int time_before_dim = 90;
+int time_before_dim = 90; // no of seconds to wait before starting to dim the screen
+
+// paths to various things
 static const char* screen_backlight_path = "/sys/devices/virtual/backlight/nvidia_backlight/brightness";
 static const char* kbd_backlight_path = "/sys/class/leds/smc::kbd_backlight/brightness";
-static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state";
+static const char* ac_adapter_path = "/proc/acpi/ac_adapter/ADP1/state"; // TODO: use /sys entries instead
 static const char* sensor_path = "/sys/devices/platform/applesmc.768/light";
 
+// constants for the min/max settings for screen/keyboard
 const int SCREEN_DIM = 500;
 int screen_bright = 20000;
 const int KBD_DIM = 0;
@@ -30,8 +58,11 @@ int daemonize = 1;
 int is_dimmed = 0;
 
 unsigned long lock_delay_ms = 10 * 60 * 1000; // lock screen after 10 minutes idle
-static const char* screen_lock_command = "/usr/bin/slimlock";
+static const char* screen_lock_command = "/usr/bin/slimlock"; // command to run to lock screen
 
+// tables that determine the steps to take to dim the screen/keyboard.
+// these are necessary because the dimming process is nonlinear
+// (ie. dimming from 1000->800 is much more noticeable than 20000->19000)
 const double SCREEN_SENSOR_LOOKUP[] = { 0.5, 0.55, 0.60, 0.64, 0.68, 0.72, 0.75, 0.78, 0.81, 0.84, 0.86,
                                         0.88, 0.90, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99 };
 const double KBD_SENSOR_LOOKUP[] = { 1.0, 0.95, 0.90, 0.86, 0.82, 0.78, 0.75, 0.72, 0.69, 0.66, 0.64, 0.62, 
@@ -41,6 +72,7 @@ int min(int a, int b) { return a < b ? a : b; }
 int max(int a, int b) { return b < a ? a : b; }
 #define countof(array) (sizeof(array)/sizeof(array[0]))
 
+// return the multiplier applied based on whether or not the power adapter is connected
 double power_adapter_multiplier() {
     char buf[255];
     FILE* f = fopen(ac_adapter_path, "r");
@@ -56,6 +88,7 @@ double power_adapter_multiplier() {
     return 1.0; // full brightness otherwise
 }
 
+// adjust either the screen or keyboard brightness given the relevant set of factors
 void adjust_single_brightness(double new_proportion, const char* path, double* offset, int* last_brightness, int min_brightness, int max_brightness, double sensor_multiplier) {
     // open up the device and write the new value in
     int current_brightness = *last_brightness;
@@ -68,7 +101,7 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
 	    }
 	    int new_brightness = (int)((new_proportion + *offset)*(max_brightness - min_brightness)) + min_brightness;
 	    if(is_dimmed) {
-		new_brightness = min_brightness * power_multiplier; // never adjust any higher than the min when fully dimmed
+		new_brightness = min_brightness * power_multiplier; // never adjust any higher than the min when fully dimmed (except for ac adapter multiplier)
 	    } else {
 		new_brightness = min(max(new_brightness * power_multiplier * sensor_multiplier, min_brightness), max_brightness);
 	    }
@@ -93,6 +126,7 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
     }
 }
 
+// adjust both screen and keyboard backlights to given proportion
 void adjust_brightness(double proportion) {
     adjust_single_brightness(proportion, screen_backlight_path, &screen_offset, &last_screen_brightness, SCREEN_DIM, screen_bright, screen_multiplier);
     adjust_single_brightness(proportion, kbd_backlight_path, &kbd_offset, &last_kbd_brightness, KBD_DIM, kbd_bright, kbd_multiplier);
@@ -103,6 +137,7 @@ int interpolate(int a, int b, double c) {
     return (int)(c*(b-a))+a;
 }
 
+// reread data from the ambient light sensor at the top of the lid
 void update_light_sensor() {
     int x = 255, y = 0;
     FILE* f = fopen(sensor_path, "r");
@@ -118,6 +153,7 @@ void update_light_sensor() {
     // now calculate updates to keyboard and screen
     // this is a bit sucky in that the resolution of the sensor seems to be
     // inadequate; there's quite an interesting range underneath the bottom of the scale
+    // (ie. 0 can be anything from "pitch darkness" to "room with 60W lightbulb")
     // and in practice values over 20 or so don't make a lot of difference.
     //
     // the screen changes in rough proportion to ambient light
@@ -142,6 +178,7 @@ void update_light_sensor() {
     }
 }
 
+// implements the gradual dimming of the backlight once the machine has gone idle
 int continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
     unsigned long initial_idle = info->idle;
     struct timespec tm_remaining = { 0, 0 };
@@ -160,6 +197,7 @@ int continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
     return 0;
 }
 
+// locks the screen once machine has been deemed to be idle for a long time
 void lock_screen() {
     // right, we simply want to run an arbitrary program here (usually slimlock)
     // system() doesn't work because we don't want to wait for it to return, so looks
@@ -179,11 +217,14 @@ void lock_screen() {
     }
 }
 
+// Waits until the user moves mouse or presses a key
 void wait_for_event(Display* display, XScreenSaverInfo* info) {
     // waiting until something happens
-    // currently just doing polling, not sure how possible it is to get notified of events from X
+    // currently just doing polling, not sure how possible it is to get notified of this event by X
+    // it's not hard to get mouse/keyboard events for your window but I don't think you can get *any* such event
+    // TODO: is there a different approach? could we hook into devices in /dev or something? may not be worth going down that rabbit hole though...
     struct timespec tm_remaining = { 0, 0 };
-    struct timespec half_second = { 0, 500000000 };
+    struct timespec half_second = { 0, 500000000 }; // this is about the longest period that still feels reasonably responsive when undimming the screen
     unsigned long last_idle;
     int locked_screen = 0;
     do {
@@ -202,6 +243,7 @@ void wait_for_event(Display* display, XScreenSaverInfo* info) {
     } while(info->idle >= last_idle);
 }
 
+// rereads the power adapter state and updates appropriately
 void refresh_adapter_state() {
     power_multiplier = power_adapter_multiplier();
     // call again with the last adjustment passed in case it's changed.
@@ -209,6 +251,7 @@ void refresh_adapter_state() {
 }
 
 void parse_options(int argc, char* argv[]) {
+    // TODO: no doubt there are more things that really should be in here - various paths and whatnot
     int opt;
     while ((opt = getopt(argc, argv, "ds:k:t:l:")) != -1) {
         switch(opt) {
@@ -246,6 +289,9 @@ int main(int argc, char* argv[]) {
 	}
     }
 
+    // we will be sent a USR1 by acpid when the power adapter is plugged/unplugged. at that point we reread its state.
+    // this approach saves us from having to poll that every few seconds to see if it's changed
+    // (one of the few places where it's practical to avoid polling)
     signal(SIGUSR1, refresh_adapter_state);
 
     XScreenSaverInfo* info = XScreenSaverAllocInfo();
@@ -262,10 +308,10 @@ int main(int argc, char* argv[]) {
     update_light_sensor();
 
     // NB. ideally we would use select() or something to wait for the applesmc sysfs entry
-    //     to change, but it doesn't seem to work...
+    //     to change, but it doesn't seem to work. Not sure that's possible on this kind of hardware sensor?
 
     while(1) {
-        // we've just gone idle. wait in 2 second chunks to keep checking the backlight
+        // we've just gone idle. wait in 2 second chunks to keep checking the light sensor
 	for(int i = 0; i < time_before_dim * 1000 - info->idle; i += 2000) {
 	    sleep(2);
 	    update_light_sensor();
