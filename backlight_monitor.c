@@ -59,6 +59,7 @@ int is_dimmed = 0;
 
 unsigned long lock_delay_ms = 10 * 60 * 1000; // lock screen after 10 minutes idle
 static const char* screen_lock_command = "/usr/bin/slimlock"; // command to run to lock screen
+#define dprintf if(!daemonize) printf
 
 // tables that determine the steps to take to dim the screen/keyboard.
 // these are necessary because the dimming process is nonlinear
@@ -115,15 +116,13 @@ void adjust_single_brightness(double new_proportion, const char* path, double* o
     }
 
     // print some debugging info if it'll be visible
-    if(!daemonize) {
-	printf("Adjusting brightness at %s\n"
-	       "    New proportion: %lf\n"
-	       "    New brightness: %d\n"
-	       "    Power multiplier: %lf\n"
-	       "    Sensor multiplier: %lf\n"
-	       "    Offset: %lf\n",
-	       path, new_proportion, *last_brightness, power_multiplier, sensor_multiplier, *offset);
-    }
+    dprintf("Adjusting brightness at %s\n"
+	    "    New proportion: %lf\n"
+	    "    New brightness: %d\n"
+            "    Power multiplier: %lf\n"
+	    "    Sensor multiplier: %lf\n"
+	    "    Offset: %lf\n",
+            path, new_proportion, *last_brightness, power_multiplier, sensor_multiplier, *offset);
 }
 
 // adjust both screen and keyboard backlights to given proportion
@@ -164,13 +163,11 @@ void update_light_sensor() {
 
     if(screen != screen_multiplier || kbd != kbd_multiplier) {
 
-	if(!daemonize) {
-	    printf("Light sensor value changed. Updating brightness\n"
-		   "    New sensor value: %d\n"
-		   "    New screen multiplier: %lf\n"
-		   "    New keyboard multiplier: %lf\n",
-		   x, screen, kbd);
-	}
+	dprintf("Light sensor value changed. Updating brightness\n"
+		"    New sensor value: %d\n"
+		"    New screen multiplier: %lf\n"
+		"    New keyboard multiplier: %lf\n",
+		x, screen, kbd);
 
 	screen_multiplier = screen;
 	kbd_multiplier = kbd;
@@ -183,7 +180,8 @@ int continuous_dim_backlight(Display* display, XScreenSaverInfo* info) {
     unsigned long initial_idle = info->idle;
     struct timespec tm_remaining = { 0, 0 };
     struct timespec ten_milliseconds = { 0, 10000000 };
-    for(double proportion = 1.0; proportion >= 0.0; proportion -= 0.001) {
+    double proportion;
+    for(proportion = 1.0; proportion >= 0.0; proportion -= 0.001) {
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
 	if(info->idle < initial_idle) {
 	    // obviously we've come out of idle in the last sleep. bail here.
@@ -202,9 +200,7 @@ void lock_screen() {
     // right, we simply want to run an arbitrary program here (usually slimlock)
     // system() doesn't work because we don't want to wait for it to return, so looks
     // like it's vfork()+exec() to the rescue
-    if(!daemonize) {
-	printf("Forking to lock screen\n");
-    }
+    dprintf("Forking to lock screen\n");
     pid_t pid = vfork();
     if(pid < 0) {
 	fprintf(stderr, "VFork failed with %d\n", pid);
@@ -212,8 +208,8 @@ void lock_screen() {
         // we are now the child process. run the screen locker.
 	execl(screen_lock_command, screen_lock_command, NULL);
 	exit(EXIT_FAILURE); // we shouldn't get here. if we do exec() has failed - there's not much to be done, just bail.
-    } else if(!daemonize) {
-	printf("Forked child process %d. Continuing.\n", pid);
+    } else {
+	dprintf("Forked child process %d. Continuing.\n", pid);
     }
 }
 
@@ -312,12 +308,11 @@ int main(int argc, char* argv[]) {
 
     while(1) {
         // we've just gone idle. wait in 2 second chunks to keep checking the light sensor
-	for(int i = 0; i < time_before_dim * 1000 - info->idle; i += 2000) {
+        int i;
+	for(i = 0; i < time_before_dim * 1000 - info->idle; i += 2000) {
 	    sleep(2);
 	    update_light_sensor();
-	    if(!daemonize) {
-		printf("Time until dimming planned to begin: %ld\n", time_before_dim - info->idle/1000 - i/1000);
-	    }
+	    dprintf("Time until dimming planned to begin: %ld\n", time_before_dim - info->idle/1000 - i/1000);
 	}
 	// now check the idle time again
         XScreenSaverQueryInfo(display, DefaultRootWindow(display), info);
@@ -327,9 +322,7 @@ int main(int argc, char* argv[]) {
 	}
 
 	// here we have waited the requisite amount of time. dim the display.
-	if(!daemonize) {
-	    printf("Dimming display\n");
-	}
+	dprintf("Dimming display\n");
 	if(!continuous_dim_backlight(display, info)) {
 	    wait_for_event(display, info);
 	}
