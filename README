@@ -1,0 +1,77 @@
+backlight_monitor
+=================
+
+Written by Peter Ebden <peter.ebden@gmail.com>
+
+
+This is a (supposedly) simple utility to manage the backlight levels of
+the screen and keyboard on my laptop. The basic core of it is to wait
+until X goes idle for a sufficient length of time and then slowly
+dim the backlight down to almost nothing. Obviously this saves battery
+and personally I prefer it to using dpms or something to abruptly cut
+the display (my dpms is set to kick in a couple of minutes later, so
+at that point it's already dimmed and not too obvious).
+
+The program has gained some complication over time. Among other things,
+it now manages the keyboard backlight as well (which is *not* handled
+by dpms) and takes input from a couple of other sources, namely: 
+
+ - the input from the ambient light sensor; we don't require the screen
+   to be as bright if we're in a dark room. Unfortunately the sensor tends
+   to be a little coarse - there is still a lot of interesting range below
+   (0,0) and in practice anything over (20,0) is "bright". Still it's
+   better than nothing.
+
+ - the state of the power adapter. if it's plugged in we increase the
+   level of the backlight, because we don't care about battery usage.
+
+It also makes some attempt to handle manual changes to the backlight
+but in practice this rapidly gets tricky - there are already quite
+a few variables determining the ideal level and having someone altering
+it themselves only makes that worse. This continues to be a fertile
+source of bugs.
+
+
+The program should be able to be compiled on a Linux system with X and
+the XScreenSaver extension. I've not written a Makefile yet but it's
+easily built with
+gcc backlight_monitor.c -o backlight_monitor -lX11 -lXss
+
+In practice the things it needs to do are closely tied up with the
+particular implementations of the screen backlight, keyboard backlight
+and light sensor. This means it's unlikely to work on a *BSD system
+or in fact on any laptop that isn't using nvidia_backlight, applesmc
+and etc. 
+
+
+This project is licensed under the GNU GPLv3. See the included
+COPYING file for the text of the license.
+
+
+There are quite a few things that I'd like to improve here, suggesting
+that it's not as easy to write and finish a small utility as I thought. 
+For example:
+
+ - It would be really nice to avoid polling. Currently we poll at various
+   intervals when waiting to go idle or when the screen is dimmed; obviously
+   that's less than ideal and it'd be much preferable to sleep until something
+   interesting happens. The trick is to find out how; for input we need
+   to be able to get notified by X when the user does something, which
+   seems plausibly possible although I haven't found how yet. I suspect
+   the light sensor is harder; I have read something suggesting that you
+   can use select() to block on sysfs entries but it didn't work for me.
+   I'm not sure that's going to work for this kind of hardware sensor.
+   Either way, the current design works for now.
+
+ - The handling of manual changes to backlight brightness doesn't work
+   well. May want a completely different design here, like having them
+   implemented as signals sent to this program rather than manual updates
+   in the background.
+
+ - More robust handling of errors reading/writing the various files.
+   Really should have some kind of backoff/retry approach since something
+   else may be reading at the same time and we can really just wait for them.
+
+ - It should be possible to specify more of the paths etc; currently they're
+   mostly hardcoded because I never need to change them.
+
